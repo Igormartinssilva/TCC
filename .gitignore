@@ -13,4 +13,19 @@ __pycache__/
 .DS_Store
 model/
 data/
+"@ | Out-File -Encoding utf8 .gitignore@"
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.h5
+*.keras
+.env
+.ipynb_checkpoints/
+*.log
+*.csv
+.DS_Store
+model/
+data/
 "@ | Out-File -Encoding utf8 .gitignore
