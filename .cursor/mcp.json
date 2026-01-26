@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "demo-mcp": {
+      "command": "${workspaceFolder}/my-mcp-server/mcp-server-demo/venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/my-mcp-server/mcp-server-demo/server2.py"],
+      "env": {}
+    }
+  }
+}
