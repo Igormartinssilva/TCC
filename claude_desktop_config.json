@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "Demo": {
+      "command": "C:\\Users\\igorm\\.local\\bin\\uv.EXE",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "C:\\Users\\igorm\\tcc\\my-mcp-server\\mcp-server-demo\\server3.py"
+      ]
+    },
+    "Kubectl": {
+      "command": "C:\\Users\\igorm\\.local\\bin\\uv.EXE",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "C:\\Users\\igorm\\tcc\\kubectl-mcp-server\\kubectl_server.py"
+      ]
+    }
+  }
+}
