@@ -1,0 +1,9 @@
+{
+  "github.copilot.mcp.servers": [
+    {
+      "name": "demo-mcp",
+      "url": "http://localhost:8090",
+      "enabled": true
+    }
+  ]
+}

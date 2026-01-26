@@ -1,0 +1,6 @@
+{
+  "github.copilot.advanced": {
+    "debug.testOverrideProxyUrl": "http://localhost:8090",
+    "debug.overrideChatModel": "gpt-4"
+  }
+}
