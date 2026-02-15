@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubernetes
+  namespace: imsilva
+  labels:
+    app: mcp-kubernetes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-kubernetes
+  template:
+    metadata:
+      labels:
+        app: mcp-kubernetes
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: mcp-app
+        image: python:3.10-slim
+        command:
+          - sh
+          - -c
+          - |
+            pip install -r /app/requirements.txt &&
+            uvicorn main:app --host 0.0.0.0 --port 8000
+        workingDir: /app
+        volumeMounts:
+        - name: mcp-app
+          mountPath: /app
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: mcp-app
+        configMap:
+          name: mcp-app
