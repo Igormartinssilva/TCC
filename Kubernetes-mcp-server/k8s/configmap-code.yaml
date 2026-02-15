@@ -1,0 +1,228 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-app
+  namespace: imsilva
+data:
+  main.py: |
+    from fastapi import FastAPI, HTTPException
+    from kubernetes import client, config, watch
+    from kubernetes.client.rest import ApiException
+    import logging
+
+    app = FastAPI(
+        title="Kubernetes Observability MCP",
+        version="1.0.0",
+        description="MCP para observabilidade Kubernetes via Python SDK"
+    )
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Carregar configuração do cluster
+    try:
+        config.load_incluster_config()  # Quando rodar dentro do cluster
+    except:
+        config.load_kube_config()  # Quando rodar localmente
+
+    v1 = client.CoreV1Api()
+    apps_v1 = client.AppsV1Api()
+
+
+    @app.get("/health")
+    async def health():
+        """Health check"""
+        return {"status": "ok"}
+
+
+    @app.post("/tools/list_pods", operation_id="list_pods")
+    async def list_pods(namespace: str = "default"):
+        """
+        Lista pods em um namespace Kubernetes
+        """
+        try:
+            logger.info(f"Listando pods no namespace {namespace}")
+            pods = v1.list_namespaced_pod(namespace=namespace)
+            
+            result = []
+            for pod in pods.items:
+                result.append({
+                    "name": pod.metadata.name,
+                    "status": pod.status.phase,
+                    "node": pod.spec.node_name,
+                    "containers": len(pod.spec.containers),
+                    "created": pod.metadata.creation_timestamp
+                })
+            
+            return {
+                "namespace": namespace,
+                "count": len(result),
+                "pods": result
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao listar pods: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+    @app.post("/tools/get_pod_logs", operation_id="get_pod_logs")
+    async def get_pod_logs(
+        pod_name: str,
+        namespace: str = "default",
+        lines: int = 50
+    ):
+        """
+        Retorna logs de um pod
+        """
+        try:
+            logger.info(f"Logs do pod {pod_name} no namespace {namespace}")
+            logs = v1.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                tail_lines=lines
+            )
+            
+            return {
+                "pod": pod_name,
+                "namespace": namespace,
+                "logs": logs
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao obter logs: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+    @app.post("/tools/describe_pod", operation_id="describe_pod")
+    async def describe_pod(pod_name: str, namespace: str = "default"):
+        """
+        Descreve um pod (informações detalhadas)
+        """
+        try:
+            logger.info(f"Describe pod {pod_name}")
+            pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+            
+            return {
+                "name": pod.metadata.name,
+                "namespace": pod.metadata.namespace,
+                "status": pod.status.phase,
+                "node": pod.spec.node_name,
+                "ip": pod.status.pod_ip,
+                "containers": [
+                    {
+                        "name": c.name,
+                        "image": c.image,
+                        "ports": [p.container_port for p in (c.ports or [])]
+                    }
+                    for c in pod.spec.containers
+                ],
+                "conditions": [
+                    {
+                        "type": c.type,
+                        "status": c.status,
+                        "message": c.message
+                    }
+                    for c in (pod.status.conditions or [])
+                ]
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao descrever pod: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+    @app.post("/tools/list_deployments", operation_id="list_deployments")
+    async def list_deployments(namespace: str = "default"):
+        """
+        Lista deployments em um namespace
+        """
+        try:
+            logger.info(f"Listando deployments no namespace {namespace}")
+            deployments = apps_v1.list_namespaced_deployment(namespace=namespace)
+            
+            result = []
+            for dep in deployments.items:
+                result.append({
+                    "name": dep.metadata.name,
+                    "replicas": dep.spec.replicas,
+                    "ready_replicas": dep.status.ready_replicas or 0,
+                    "image": dep.spec.template.spec.containers[0].image if dep.spec.template.spec.containers else None,
+                    "created": dep.metadata.creation_timestamp
+                })
+            
+            return {
+                "namespace": namespace,
+                "count": len(result),
+                "deployments": result
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao listar deployments: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+    @app.get("/tools/cluster_info", operation_id="cluster_info")
+    async def cluster_info():
+        """
+        Informações do cluster Kubernetes
+        """
+        try:
+            logger.info("Obtendo informações do cluster")
+            nodes = v1.list_node()
+            namespaces = v1.list_namespace()
+            
+            return {
+                "nodes": {
+                    "count": len(nodes.items),
+                    "nodes": [
+                        {
+                            "name": n.metadata.name,
+                            "status": n.status.conditions[-1].type if n.status.conditions else "Unknown",
+                            "kubelet_version": n.status.node_info.kubelet_version
+                        }
+                        for n in nodes.items
+                    ]
+                },
+                "namespaces": {
+                    "count": len(namespaces.items),
+                    "namespaces": [ns.metadata.name for ns in namespaces.items]
+                }
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao obter info do cluster: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+    @app.post("/tools/get_pod_events", operation_id="get_pod_events")
+    async def get_pod_events(pod_name: str, namespace: str = "default"):
+        """
+        Retorna eventos de um pod
+        """
+        try:
+            logger.info(f"Eventos do pod {pod_name}")
+            events = v1.list_namespaced_event(namespace=namespace)
+            
+            pod_events = [
+                {
+                    "type": e.type,
+                    "reason": e.reason,
+                    "message": e.message,
+                    "count": e.count,
+                    "first_timestamp": e.first_timestamp,
+                    "last_timestamp": e.last_timestamp
+                }
+                for e in events.items
+                if e.involved_object.name == pod_name
+            ]
+            
+            return {
+                "pod": pod_name,
+                "namespace": namespace,
+                "events": pod_events
+            }
+        except ApiException as e:
+            logger.error(f"Erro ao obter eventos: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+  requirements.txt: |
+    fastapi==0.104.1
+    uvicorn[standard]==0.24.0
+    pydantic==2.5.0
+    python-multipart==0.0.6
+    kubernetes
