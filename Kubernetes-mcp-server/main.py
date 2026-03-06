@@ -11,6 +11,11 @@ app = FastAPI(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@app.get("/")
+def root():
+    """Endpoint raiz para health check"""
+    return {"status": "ok", "message": "Kubernetes Observability MCP is running"}
+
 
 def run_kubectl(command: list) -> str:
     try:
@@ -30,7 +35,7 @@ def run_kubectl(command: list) -> str:
 @app.post("/tools/list_pods", operation_id="list_pods")
 def list_pods(namespace: str = "default"):
     """
-    Lista pods em um namespace Kubernetes
+    List pods in a Kubernetes namespace
     """
     logger.info(f"Listando pods no namespace {namespace}")
     output = run_kubectl(
@@ -75,3 +80,17 @@ def cluster_info():
     logger.info("Cluster info")
     output = run_kubectl(["kubectl", "cluster-info"])
     return {"output": output}
+
+@app.post("/tools/metrics", operation_id="metrics")
+def metrics():
+    """
+    Métricas do cluster Kubernetes
+    """
+    logger.info("Cluster metrics")
+    output = run_kubectl(["kubectl", "top", "nodes"])
+    return {"output": output}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

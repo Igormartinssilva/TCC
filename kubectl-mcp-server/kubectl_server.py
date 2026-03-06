@@ -71,3 +71,10 @@ def cluster_info() -> str:
     logger.info("Obtendo informações do cluster")
     result = run_kubectl(["kubectl", "cluster-info"])
     return result["output"]
+
+@mcp.tool()
+def metrics() -> str:
+    """Obtém métricas do cluster Kubernetes."""
+    logger.info("Obtendo métricas do cluster")
+    result = run_kubectl(["kubectl", "top", "nodes", "pods"])
+    return result["output"]
