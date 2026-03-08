@@ -25,6 +25,7 @@ __pycache__/
 .ipynb_checkpoints/
 *.log
 *.csv
+Time-LLM/dataset/
 .DS_Store
 model/
 data/
