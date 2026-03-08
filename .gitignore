@@ -28,4 +28,6 @@ __pycache__/
 .DS_Store
 model/
 data/
-"@ | Out-File -Encoding utf8 .gitignore
+"@ | Out-File -Encoding utf8 .gitignoreTime-LLM/dataset/solar/solar_AL.txt
+Time-LLM/time-series-dataset.zip
+Time-LLM/dataset/m4/training.npz
