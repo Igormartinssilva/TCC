@@ -1,0 +1,11 @@
+services:
+  mcp:
+    image: teu-mcp
+    ports:
+      - "8080:8080"
+    volumes:
+      - C:\Users\igorm\.kube:/root/.kube
+    environment:
+      - KUBECONFIG=/root/.kube/config
+    extra_hosts:
+      - "k8s.inf.ufrgs.br:host-gateway"

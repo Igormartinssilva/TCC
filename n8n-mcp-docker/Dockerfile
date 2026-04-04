@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y curl ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install --no-cache-dir mcp[cli] fastmcp pydantic uvicorn
+RUN pip install --no-cache-dir mcp[cli] fastmcp pydantic uvicorn kubernetes
 
 WORKDIR /app
 COPY k8s_mcp.py .

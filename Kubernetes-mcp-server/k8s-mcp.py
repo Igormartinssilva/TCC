@@ -1,6 +1,5 @@
-import os
 import sys
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 from typing import Optional
 import subprocess
@@ -8,9 +7,8 @@ import logging
 import json
 import re
 from datetime import datetime, timedelta
-from kubernetes import client, config
 
-# Configure logging
+# Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -18,14 +16,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create MCP server
-mcp = FastMCP("k8s_mcp")
+# Create an MCP server
+mcp = FastMCP("k8s")
 
 # ─────────────────────────────────────────────
-# UTILITIES
+# UTILITÁRIOS
 # ─────────────────────────────────────────────
-
-def run_kubectl(command: list, timeout: int = 60) -> str:
+def run_kubectl(command: list, timeout: int = 60) -> str:  # Aumentado de 30 para 60
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
@@ -35,7 +32,6 @@ def run_kubectl(command: list, timeout: int = 60) -> str:
         return "ERROR: kubectl command timed out after 60s"
     except Exception as e:
         return str(e)
-
 
 def run_kubectl_json(command: list) -> dict:
     command += ["-o", "json"]
@@ -47,9 +43,8 @@ def run_kubectl_json(command: list) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-
 def parse_resource_value(value: str) -> float:
-    """Converts values like 250m, 1Gi, 512Mi to float (CPU in cores, memory in MiB)"""
+    """Converte valores como 250m, 1Gi, 512Mi para float (CPU em cores, memória em MiB)"""
     if not value or value == "<unknown>":
         return 0.0
     if value.endswith("m"):
@@ -76,26 +71,25 @@ def now_iso() -> str:
 
 @mcp.tool()
 def root():
-    """Health check — returns server status"""
     return {"status": "ok", "message": "Kubernetes Observability MCP v2 is running", "timestamp": now_iso()}
 
 
 # ─────────────────────────────────────────────
-# 1. BASIC
+# 1. BÁSICO (herdado + melhorado)
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def list_pods(namespace: str = "default"):
-    """List pods in a namespace with detailed status"""
-    logger.info(f"Listing pods in namespace {namespace}")
+    """Lista pods em um namespace com status detalhado"""
+    logger.info(f"Listando pods no namespace {namespace}")
     output = run_kubectl(["kubectl", "get", "pods", "-n", namespace, "-o", "wide"])
     return {"output": output, "namespace": namespace, "timestamp": now_iso()}
 
 
 @mcp.tool()
 def get_pod_logs(pod_name: str, namespace: str = "default", lines: int = 50, container: Optional[str] = None):
-    """Returns logs from a pod (supports multiple containers)"""
-    logger.info(f"Fetching logs for pod {pod_name}")
+    """Retorna logs de um pod (suporta múltiplos containers)"""
+    logger.info(f"Logs do pod {pod_name}")
     cmd = ["kubectl", "logs", pod_name, "-n", namespace, f"--tail={lines}"]
     if container:
         cmd += ["-c", container]
@@ -105,15 +99,15 @@ def get_pod_logs(pod_name: str, namespace: str = "default", lines: int = 50, con
 
 @mcp.tool()
 def describe_pod(pod_name: str, namespace: str = "default"):
-    """Describes a pod with all events and conditions"""
-    logger.info(f"Describing pod {pod_name}")
+    """Descreve um pod com todos os eventos e condições"""
+    logger.info(f"Describe pod {pod_name}")
     output = run_kubectl(["kubectl", "describe", "pod", pod_name, "-n", namespace])
     return {"output": output}
 
 
 @mcp.tool()
 def cluster_info():
-    """General cluster information"""
+    """Informações gerais do cluster"""
     output = run_kubectl(["kubectl", "cluster-info"])
     version = run_kubectl(["kubectl", "version", "--short"])
     nodes = run_kubectl(["kubectl", "get", "nodes", "-o", "wide"])
@@ -122,26 +116,29 @@ def cluster_info():
 
 @mcp.tool()
 def metrics():
-    """Current CPU and memory metrics for nodes and pods"""
+    """Métricas atuais de CPU e memória dos nós"""
     nodes = run_kubectl(["kubectl", "top", "nodes"])
     pods = run_kubectl(["kubectl", "top", "pods", "--all-namespaces"])
     return {"nodes": nodes, "pods": pods, "timestamp": now_iso()}
 
 
 # ─────────────────────────────────────────────
-# 2. POD RESOURCE SNAPSHOTS
+# 2. SÉRIES TEMPORAIS DE PODS
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_pod_resource_history(namespace: str = "default", hours: int = 1):
     """
-    Current CPU/memory snapshot for all pods in the namespace.
-    Returns structured data for time-series analysis.
-    Includes limits, requests, and current usage to detect throttling/OOM risk.
+    Snapshot atual de CPU/memória de todos os pods no namespace.
+    Retorna dados estruturados para análise de séries temporais.
+    Inclui limites, requests e uso atual para detectar throttling/OOM risk.
     """
-    logger.info(f"Resource history for namespace {namespace}")
+    logger.info(f"Resource history para namespace {namespace}")
 
+    # Uso atual via top
     top_raw = run_kubectl(["kubectl", "top", "pods", "-n", namespace, "--no-headers"])
+
+    # Requests e limits via JSON
     pods_json = run_kubectl_json(["kubectl", "get", "pods", "-n", namespace])
 
     usage_map = {}
@@ -192,23 +189,23 @@ def get_pod_resource_history(namespace: str = "default", hours: int = 1):
         "pod_count": len(result),
         "resources": result,
         "interpretation_hint": (
-            "throttle_risk=high means usage is above 85% of CPU limit — pod likely suffers throttling. "
-            "OOM risk when mem_usage approaches mem_limit."
+            "throttle_risk=high significa uso acima de 85% do limit de CPU — "
+            "pod provavelmente sofre throttling. OOM risk quando mem_usage se aproxima de mem_limit."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 3. RESTART HISTORY
+# 3. HISTÓRICO DE RESTARTS (proxy de instabilidade)
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_restart_timeline(namespace: str = "default"):
     """
-    Returns restart history for all pods in the namespace.
-    Pods with many restarts indicate crashloops — important pattern for time-series analysis.
+    Retorna histórico de restarts de todos os pods no namespace.
+    Pods com muitos restarts indicam crashloops — padrão importante em séries temporais.
     """
-    logger.info(f"Restart timeline for namespace {namespace}")
+    logger.info(f"Restart timeline para {namespace}")
     pods_json = run_kubectl_json(["kubectl", "get", "pods", "-n", namespace])
 
     restarts = []
@@ -258,25 +255,25 @@ def get_restart_timeline(namespace: str = "default"):
             "healthy_pods": sum(1 for p in restarts if p["severity"] == "ok"),
         },
         "interpretation_hint": (
-            "exit_code=137 = OOMKill (out of memory). "
-            "exit_code=1 = application error. "
-            "exit_code=143 = SIGTERM (normal shutdown or eviction)."
+            "exit_code=137 = OOMKill (sem memória). "
+            "exit_code=1 = erro de aplicação. "
+            "exit_code=143 = SIGTERM (shutdown normal ou eviction)."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 4. CLUSTER EVENTS
+# 4. EVENTOS DO CLUSTER (correlação com picos)
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_events_timeline(namespace: str = "default", event_type: Optional[str] = None):
     """
-    Lists recent cluster events sorted by timestamp.
-    Essential for correlating metric spikes with events (deploys, OOMKills, evictions).
-    event_type: 'Warning' or 'Normal'
+    Lista eventos recentes do cluster ordenados por timestamp.
+    Essencial para correlacionar picos de métricas com eventos (deploys, OOMKills, evictions).
+    event_type: 'Warning' ou 'Normal'
     """
-    logger.info(f"Events timeline for namespace {namespace}")
+    logger.info(f"Events timeline para {namespace}")
     events_json = run_kubectl_json(["kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp"])
 
     events = []
@@ -305,23 +302,23 @@ def get_events_timeline(namespace: str = "default", event_type: Optional[str] = 
         "events": events,
         "top_warnings": warnings[:10],
         "interpretation_hint": (
-            "Correlate 'last_time' of warnings with CPU/memory spikes. "
-            "Critical reasons: OOMKilling, Evicted, BackOff, FailedScheduling."
+            "Correlacione 'last_time' dos warnings com picos de CPU/memória. "
+            "Razões críticas: OOMKilling, Evicted, BackOff, FailedScheduling."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 5. HPA STATUS
+# 5. HPA — HISTÓRICO DE ESCALONAMENTO
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_hpa_status(namespace: str = "default"):
     """
-    Returns current HPA (Horizontal Pod Autoscaler) status.
-    Shows current vs min/max replicas and scaling metrics.
+    Retorna status atual dos HPAs (Horizontal Pod Autoscalers).
+    Mostra réplicas atuais vs mín/máx e métricas que disparam o scale.
     """
-    logger.info(f"HPA status for namespace {namespace}")
+    logger.info(f"HPA status para {namespace}")
     hpa_json = run_kubectl_json(["kubectl", "get", "hpa", "-n", namespace])
 
     hpas = []
@@ -374,21 +371,21 @@ def get_hpa_status(namespace: str = "default"):
         "hpas": hpas,
         "saturated_hpas": [h for h in hpas if h["at_maximum"]],
         "interpretation_hint": (
-            "scaling_pressure=saturated_at_max means the HPA wants more replicas but has hit its limit — "
-            "likely a capacity bottleneck. Check last_scale_time to see when the last scale event occurred."
+            "scaling_pressure=saturated_at_max indica que o HPA quer mais réplicas mas já atingiu o limite — "
+            "provável gargalo de capacidade. Verifique last_scale_time para ver quando foi o último evento de scale."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 6. NODE PRESSURE
+# 6. PRESSÃO DE NÓS
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_node_pressure():
     """
-    Checks node pressure conditions (MemoryPressure, DiskPressure, PIDPressure).
-    Essential for understanding evictions and time-series instability.
+    Verifica condições de pressão nos nós (MemoryPressure, DiskPressure, PIDPressure).
+    Fundamental para entender evictions e instabilidade em séries temporais.
     """
     logger.info("Node pressure check")
     nodes_json = run_kubectl_json(["kubectl", "get", "nodes"])
@@ -443,24 +440,24 @@ def get_node_pressure():
         "nodes_with_pressure": [n for n in nodes if n["has_any_pressure"]],
         "nodes_not_ready": [n for n in nodes if n["ready"] != "True"],
         "interpretation_hint": (
-            "MemoryPressure=True causes pod eviction — correlate with 'Evicted' events. "
-            "DiskPressure can cause image pull failures and log write errors."
+            "MemoryPressure=True causa eviction de pods — correlacione com eventos 'Evicted'. "
+            "DiskPressure pode causar falhas de pull de imagem e escrita de logs."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 7. RESOURCE PATTERN ANALYSIS
+# 7. ANÁLISE DE PADRÕES E TENDÊNCIAS
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def analyze_resource_patterns(namespace: str = "default"):
     """
-    Analyzes resource usage patterns for all pods in the namespace.
-    Detects: idle pods, over-provisioned pods, OOM/throttling risk pods.
-    Returns insights ready for LLM interpretation.
+    Analisa padrões de uso de recursos em todos os pods do namespace.
+    Detecta: pods ociosos, pods super-provisionados, pods com risco de OOM/throttling.
+    Retorna insights prontos para interpretação da LLM.
     """
-    logger.info(f"Analyzing resource patterns for namespace {namespace}")
+    logger.info(f"Analisando padrões para {namespace}")
     top_raw = run_kubectl(["kubectl", "top", "pods", "-n", namespace, "--no-headers"])
     pods_json = run_kubectl_json(["kubectl", "get", "pods", "-n", namespace])
 
@@ -503,16 +500,16 @@ def analyze_resource_patterns(namespace: str = "default"):
         entry = {"pod": pod_name, "cpu_usage": cpu_use, "mem_usage": mem_use}
 
         if cpu_lim_val > 0 and (cpu_use_val / cpu_lim_val) > 0.85:
-            entry["issue"] = f"Throttling risk: using {cpu_use} of {lims.get('cpu_limit')} limit"
+            entry["issue"] = f"Throttling risk: usando {cpu_use} de {lims.get('cpu_limit')} limit"
             throttle_risk.append(entry)
         elif mem_lim_val > 0 and (mem_use_val / mem_lim_val) > 0.85:
-            entry["issue"] = f"OOM risk: using {mem_use} of {lims.get('mem_limit')} limit"
+            entry["issue"] = f"OOM risk: usando {mem_use} de {lims.get('mem_limit')} limit"
             oom_risk.append(entry)
         elif cpu_req_val > 0 and cpu_use_val < (cpu_req_val * 0.10):
-            entry["issue"] = f"Idle: only using {cpu_use} with request of {lims.get('cpu_request')}"
+            entry["issue"] = f"Ocioso: usando apenas {cpu_use} com request de {lims.get('cpu_request')}"
             idle.append(entry)
         elif cpu_lim_val > 0 and cpu_req_val > 0 and (cpu_lim_val / max(cpu_req_val, 0.001)) > 10:
-            entry["issue"] = f"Over-provisioned: request={lims.get('cpu_request')} limit={lims.get('cpu_limit')}"
+            entry["issue"] = f"Super-provisionado: request={lims.get('cpu_request')} limit={lims.get('cpu_limit')}"
             over_provisioned.append(entry)
         else:
             healthy.append(entry)
@@ -535,38 +532,39 @@ def analyze_resource_patterns(namespace: str = "default"):
         "recommendations": _generate_recommendations(throttle_risk, oom_risk, idle, over_provisioned)
     }
 
-
 def _generate_recommendations(throttle, oom, idle, over_prov) -> list:
     recs = []
     if throttle:
-        recs.append(f"{len(throttle)} pod(s) at CPU throttling risk — consider increasing cpu.limit or optimizing the application.")
+        recs.append(f"{len(throttle)} pod(s) com risco de CPU throttling — considere aumentar cpu.limit ou otimizar a aplicação.")
     if oom:
-        recs.append(f"{len(oom)} pod(s) at OOMKill risk — increase memory.limit or investigate memory leaks.")
+        recs.append(f"{len(oom)} pod(s) com risco de OOMKill — aumente memory.limit ou investigue memory leaks.")
     if idle:
-        recs.append(f"{len(idle)} pod(s) consuming <10% of cpu.request — reduce requests to free cluster capacity.")
+        recs.append(f"{len(idle)} pod(s) consumindo <10% do cpu.request — reduza requests para liberar capacidade do cluster.")
     if over_prov:
-        recs.append(f"{len(over_prov)} over-provisioned pod(s) — request/limit ratio too high, adjust for better bin-packing.")
+        recs.append(f"{len(over_prov)} pod(s) super-provisionados — ratio request/limit muito alto, ajuste para melhor bin-packing.")
     if not recs:
-        recs.append("Resources appear well-sized. Keep monitoring.")
+        recs.append("Recursos parecem bem dimensionados. Continue monitorando.")
     return recs
 
 
 # ─────────────────────────────────────────────
-# 8. EVENT + METRIC CORRELATION (Root Cause)
+# 8. CORRELAÇÃO EVENTO + MÉTRICA (Root Cause)
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def correlate_events_and_resources(namespace: str = "default"):
     """
-    Correlates Warning events with current resource usage.
-    Returns a consolidated view for root cause analysis.
+    Correlaciona eventos de Warning com uso atual de recursos.
+    Retorna uma visão consolidada para root cause analysis — o 'painel de investigação' da LLM.
     """
-    logger.info(f"Correlating events and resources in namespace {namespace}")
+    logger.info(f"Correlacionando eventos e recursos em {namespace}")
 
+    # Coleta paralela
     events_data = get_events_timeline(namespace=namespace, event_type="Warning")
     resources_data = get_pod_resource_history(namespace=namespace)
     restarts_data = get_restart_timeline(namespace=namespace)
 
+    # Mapa de pods com problemas
     problem_pods = set()
     for ev in events_data.get("events", []):
         if ev["type"] == "Warning":
@@ -575,6 +573,7 @@ def correlate_events_and_resources(namespace: str = "default"):
         if pod["severity"] in ("warning", "critical"):
             problem_pods.add(pod["pod"])
 
+    # Correlação
     correlated = []
     for pod_res in resources_data.get("resources", []):
         pod_name = pod_res["pod"]
@@ -611,25 +610,25 @@ def correlate_events_and_resources(namespace: str = "default"):
         },
         "correlated_issues": correlated,
         "interpretation_hint": (
-            "This endpoint is the starting point for root cause analysis. "
-            "Pods with high restart_count + OOMKill = memory leak or limit too low. "
-            "Pods with throttle_risk=high + BackOff events = CPU overload. "
-            "Correlate 'time' of warnings with reported spike timestamps."
+            "Este endpoint é o ponto de partida para root cause analysis. "
+            "Pods com restart_count alto + OOMKill = memory leak ou limit muito baixo. "
+            "Pods com throttle_risk=high + BackOff events = sobrecarga de CPU. "
+            "Correlacione 'time' dos warnings com horários de picos reportados."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# 9. DEPLOYMENTS & ROLLOUTS
+# 9. DEPLOYMENTS E ROLLOUTS
 # ─────────────────────────────────────────────
 
 @mcp.tool()
 def get_deployment_status(namespace: str = "default"):
     """
-    Status of all deployments: available replicas, rollout in progress, images in use.
-    Useful for correlating deploys with changes in time-series data.
+    Status de todos os deployments: réplicas disponíveis, rollout em progresso, imagens em uso.
+    Útil para correlacionar deploys com mudanças em séries temporais.
     """
-    logger.info(f"Deployment status for namespace {namespace}")
+    logger.info(f"Deployment status para {namespace}")
     dep_json = run_kubectl_json(["kubectl", "get", "deployments", "-n", namespace])
 
     deployments = []
@@ -670,30 +669,14 @@ def get_deployment_status(namespace: str = "default"):
         "degraded": [d for d in deployments if d["health"] == "degraded"],
         "rolling_out": [d for d in deployments if d["rollout_in_progress"]],
         "interpretation_hint": (
-            "rollout_in_progress=True during an error spike indicates a deploy may be the root cause. "
-            "Check 'revision' and correlate with event timestamps."
+            "rollout_in_progress=True durante um pico de erros indica que um deploy pode ser a causa raiz. "
+            "Verifique 'revision' e correlacione com timestamps de eventos."
         )
     }
 
 
 # ─────────────────────────────────────────────
-# ENTRYPOINT
+# 10. PAINEL COMPLETO (snapshot diagnóstico)
 # ─────────────────────────────────────────────
 
-if __name__ == "__main__":
-    import uvicorn
 
-    transport = os.getenv("MCP_TRANSPORT", "sse")
-    host = os.getenv("MCP_HOST", "0.0.0.0")
-    port = int(os.getenv("MCP_PORT", "8080"))
-
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-    else:
-        # FastMCP 2.x expõe o app Starlette assim:
-        uvicorn.run(mcp.http_app(), host=host, port=port)
-
-
-    config.load_incluster_config()
-    v1 = client.CoreV1Api()
-    pods = v1.list_namespaced_pod(namespace="default")

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Query
+import sys
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 from typing import Optional
 import subprocess
@@ -7,29 +8,30 @@ import json
 import re
 from datetime import datetime, timedelta
 
-app = FastAPI(
-    title="Kubernetes Observability MCP",
-    version="2.0.0",
-    description="MCP completo para observabilidade e séries temporais em Kubernetes"
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stderr)]
 )
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create an MCP server
+mcp = FastMCP("k8s")
 
 # ─────────────────────────────────────────────
 # UTILITÁRIOS
 # ─────────────────────────────────────────────
-
-def run_kubectl(command: list, timeout: int = 30) -> str:
+def run_kubectl(command: list, timeout: int = 60) -> str:  # Aumentado de 30 para 60
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             return result.stderr
         return result.stdout
+    except subprocess.TimeoutExpired:
+        return "ERROR: kubectl command timed out after 60s"
     except Exception as e:
         return str(e)
-
 
 def run_kubectl_json(command: list) -> dict:
     command += ["-o", "json"]
@@ -40,7 +42,6 @@ def run_kubectl_json(command: list) -> dict:
         return json.loads(result.stdout)
     except Exception as e:
         return {"error": str(e)}
-
 
 def parse_resource_value(value: str) -> float:
     """Converte valores como 250m, 1Gi, 512Mi para float (CPU em cores, memória em MiB)"""
@@ -68,7 +69,7 @@ def now_iso() -> str:
 # HEALTH CHECK
 # ─────────────────────────────────────────────
 
-@app.get("/")
+@mcp.tool()
 def root():
     return {"status": "ok", "message": "Kubernetes Observability MCP v2 is running", "timestamp": now_iso()}
 
@@ -77,7 +78,7 @@ def root():
 # 1. BÁSICO (herdado + melhorado)
 # ─────────────────────────────────────────────
 
-@app.post("/tools/list_pods", operation_id="list_pods")
+@mcp.tool()
 def list_pods(namespace: str = "default"):
     """Lista pods em um namespace com status detalhado"""
     logger.info(f"Listando pods no namespace {namespace}")
@@ -85,7 +86,7 @@ def list_pods(namespace: str = "default"):
     return {"output": output, "namespace": namespace, "timestamp": now_iso()}
 
 
-@app.post("/tools/get_pod_logs", operation_id="get_pod_logs")
+@mcp.tool()
 def get_pod_logs(pod_name: str, namespace: str = "default", lines: int = 50, container: Optional[str] = None):
     """Retorna logs de um pod (suporta múltiplos containers)"""
     logger.info(f"Logs do pod {pod_name}")
@@ -96,7 +97,7 @@ def get_pod_logs(pod_name: str, namespace: str = "default", lines: int = 50, con
     return {"output": output, "pod": pod_name, "namespace": namespace, "lines": lines}
 
 
-@app.post("/tools/describe_pod", operation_id="describe_pod")
+@mcp.tool()
 def describe_pod(pod_name: str, namespace: str = "default"):
     """Descreve um pod com todos os eventos e condições"""
     logger.info(f"Describe pod {pod_name}")
@@ -104,7 +105,7 @@ def describe_pod(pod_name: str, namespace: str = "default"):
     return {"output": output}
 
 
-@app.post("/tools/cluster_info", operation_id="cluster_info")
+@mcp.tool()
 def cluster_info():
     """Informações gerais do cluster"""
     output = run_kubectl(["kubectl", "cluster-info"])
@@ -113,7 +114,7 @@ def cluster_info():
     return {"cluster_info": output, "version": version, "nodes": nodes, "timestamp": now_iso()}
 
 
-@app.post("/tools/metrics", operation_id="metrics")
+@mcp.tool()
 def metrics():
     """Métricas atuais de CPU e memória dos nós"""
     nodes = run_kubectl(["kubectl", "top", "nodes"])
@@ -125,7 +126,7 @@ def metrics():
 # 2. SÉRIES TEMPORAIS DE PODS
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_pod_resource_history", operation_id="get_pod_resource_history")
+@mcp.tool()
 def get_pod_resource_history(namespace: str = "default", hours: int = 1):
     """
     Snapshot atual de CPU/memória de todos os pods no namespace.
@@ -198,7 +199,7 @@ def get_pod_resource_history(namespace: str = "default", hours: int = 1):
 # 3. HISTÓRICO DE RESTARTS (proxy de instabilidade)
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_restart_timeline", operation_id="get_restart_timeline")
+@mcp.tool()
 def get_restart_timeline(namespace: str = "default"):
     """
     Retorna histórico de restarts de todos os pods no namespace.
@@ -265,7 +266,7 @@ def get_restart_timeline(namespace: str = "default"):
 # 4. EVENTOS DO CLUSTER (correlação com picos)
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_events_timeline", operation_id="get_events_timeline")
+@mcp.tool()
 def get_events_timeline(namespace: str = "default", event_type: Optional[str] = None):
     """
     Lista eventos recentes do cluster ordenados por timestamp.
@@ -311,7 +312,7 @@ def get_events_timeline(namespace: str = "default", event_type: Optional[str] = 
 # 5. HPA — HISTÓRICO DE ESCALONAMENTO
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_hpa_status", operation_id="get_hpa_status")
+@mcp.tool()
 def get_hpa_status(namespace: str = "default"):
     """
     Retorna status atual dos HPAs (Horizontal Pod Autoscalers).
@@ -380,7 +381,7 @@ def get_hpa_status(namespace: str = "default"):
 # 6. PRESSÃO DE NÓS
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_node_pressure", operation_id="get_node_pressure")
+@mcp.tool()
 def get_node_pressure():
     """
     Verifica condições de pressão nos nós (MemoryPressure, DiskPressure, PIDPressure).
@@ -449,7 +450,7 @@ def get_node_pressure():
 # 7. ANÁLISE DE PADRÕES E TENDÊNCIAS
 # ─────────────────────────────────────────────
 
-@app.post("/tools/analyze_resource_patterns", operation_id="analyze_resource_patterns")
+@mcp.tool()
 def analyze_resource_patterns(namespace: str = "default"):
     """
     Analisa padrões de uso de recursos em todos os pods do namespace.
@@ -531,7 +532,6 @@ def analyze_resource_patterns(namespace: str = "default"):
         "recommendations": _generate_recommendations(throttle_risk, oom_risk, idle, over_provisioned)
     }
 
-
 def _generate_recommendations(throttle, oom, idle, over_prov) -> list:
     recs = []
     if throttle:
@@ -551,7 +551,7 @@ def _generate_recommendations(throttle, oom, idle, over_prov) -> list:
 # 8. CORRELAÇÃO EVENTO + MÉTRICA (Root Cause)
 # ─────────────────────────────────────────────
 
-@app.post("/tools/correlate_events_and_resources", operation_id="correlate_events_and_resources")
+@mcp.tool()
 def correlate_events_and_resources(namespace: str = "default"):
     """
     Correlaciona eventos de Warning com uso atual de recursos.
@@ -622,7 +622,7 @@ def correlate_events_and_resources(namespace: str = "default"):
 # 9. DEPLOYMENTS E ROLLOUTS
 # ─────────────────────────────────────────────
 
-@app.post("/tools/get_deployment_status", operation_id="get_deployment_status")
+@mcp.tool()
 def get_deployment_status(namespace: str = "default"):
     """
     Status de todos os deployments: réplicas disponíveis, rollout em progresso, imagens em uso.
@@ -679,75 +679,4 @@ def get_deployment_status(namespace: str = "default"):
 # 10. PAINEL COMPLETO (snapshot diagnóstico)
 # ─────────────────────────────────────────────
 
-@app.post("/tools/full_diagnostic", operation_id="full_diagnostic")
-def full_diagnostic(namespace: str = "default"):
-    """
-    Painel diagnóstico completo: executa todas as análises em um único endpoint.
-    Retorna um relatório consolidado ideal para a LLM gerar uma análise narrativa.
-    """
-    logger.info(f"Full diagnostic para {namespace}")
 
-    node_pressure = get_node_pressure()
-    events = get_events_timeline(namespace=namespace, event_type="Warning")
-    restarts = get_restart_timeline(namespace=namespace)
-    patterns = analyze_resource_patterns(namespace=namespace)
-    hpa = get_hpa_status(namespace=namespace)
-    deployments = get_deployment_status(namespace=namespace)
-
-    critical_findings = []
-
-    if node_pressure.get("nodes_with_pressure"):
-        critical_findings.append(f"⚠️ {len(node_pressure['nodes_with_pressure'])} nó(s) com pressão de recursos")
-    if node_pressure.get("nodes_not_ready"):
-        critical_findings.append(f"🔴 {len(node_pressure['nodes_not_ready'])} nó(s) NOT READY")
-    if restarts["summary"]["critical_pods"] > 0:
-        critical_findings.append(f"🔴 {restarts['summary']['critical_pods']} pod(s) em crashloop (10+ restarts)")
-    if patterns["summary"]["oom_risk_count"] > 0:
-        critical_findings.append(f"⚠️ {patterns['summary']['oom_risk_count']} pod(s) com risco de OOMKill")
-    if patterns["summary"]["throttle_risk_count"] > 0:
-        critical_findings.append(f"⚠️ {patterns['summary']['throttle_risk_count']} pod(s) com CPU throttling")
-    if hpa.get("saturated_hpas"):
-        critical_findings.append(f"⚠️ {len(hpa['saturated_hpas'])} HPA(s) saturados no máximo de réplicas")
-    if deployments.get("degraded"):
-        critical_findings.append(f"⚠️ {len(deployments['degraded'])} deployment(s) degradado(s)")
-    if events.get("warning_count", 0) > 20:
-        critical_findings.append(f"⚠️ Alto volume de Warning events: {events['warning_count']}")
-
-    health_score = max(0, 100 - (len(critical_findings) * 15))
-
-    return {
-        "namespace": namespace,
-        "timestamp": now_iso(),
-        "health_score": health_score,
-        "health_status": "critical" if health_score < 40 else "degraded" if health_score < 70 else "healthy",
-        "critical_findings": critical_findings,
-        "recommendations": patterns.get("recommendations", []),
-        "node_summary": {
-            "total_nodes": len(node_pressure.get("nodes", [])),
-            "nodes_with_pressure": len(node_pressure.get("nodes_with_pressure", [])),
-            "nodes_not_ready": len(node_pressure.get("nodes_not_ready", [])),
-        },
-        "workload_summary": {
-            "deployments_total": len(deployments.get("deployments", [])),
-            "deployments_degraded": len(deployments.get("degraded", [])),
-            "hpas_saturated": len(hpa.get("saturated_hpas", [])),
-        },
-        "pod_summary": restarts.get("summary", {}),
-        "resource_patterns": patterns.get("summary", {}),
-        "top_events": events.get("top_warnings", [])[:5],
-        "top_problem_pods": sorted(
-            [p for p in restarts.get("pods", []) if p["severity"] != "ok"],
-            key=lambda x: x["total_restarts"],
-            reverse=True
-        )[:5],
-        "interpretation_hint": (
-            "Use health_score como termômetro geral (0-100). "
-            "Comece investigando critical_findings, depois top_problem_pods. "
-            "Correlacione timestamps dos top_events com métricas externas (Prometheus/Grafana)."
-        )
-    }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

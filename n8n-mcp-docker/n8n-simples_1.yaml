@@ -1,0 +1,56 @@
+---
+# Deployment do n8n
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      containers:
+      - name: n8n
+        image: docker.n8n.io/n8nio/n8n:latest
+        ports:
+        - containerPort: 5678
+        env:
+        - name: N8N_PORT
+          value: "5678"
+        - name: GENERIC_TIMEZONE
+          value: "America/Sao_Paulo"
+        - name: TZ
+          value: "BR"
+        - name: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+          value: "false"
+        - name: N8N_RUNNERS_ENABLED
+          value: "true"
+        volumeMounts:
+        - name: n8n-data
+          mountPath: /home/node/.n8n
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsGroup: 1000
+      volumes:
+      - name: n8n-data
+        emptyDir: {}
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+spec:
+  selector:
+    app: n8n
+  ports:
+  - port: 5678
+    targetPort: 5678
+  type: ClusterIP
