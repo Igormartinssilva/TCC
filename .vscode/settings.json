@@ -1,0 +1,7 @@
+{
+    "python.analysis.extraPaths": [
+        "./n8n-mcp-docker/k8s_",
+        "./Kubernetes-mcp-server/k8s-",
+        "./n8n-mcp-docker/k8s_"
+    ]
+}

@@ -1,0 +1,212 @@
+{
+  "name": "k8s-mcp-agent",
+  "nodes": [
+    {
+      "parameters": {
+        "availableInChat": true,
+        "agentName": "meu_primeiro_agente",
+        "agentDescription": "testando para ver se integra com llama3 e com webUI",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        80,
+        -96
+      ],
+      "id": "4f1c8a40-31f6-4f70-b4e2-d0db52748296",
+      "name": "When chat message received",
+      "webhookId": "eefc3f7d-1391-4041-82df-ff5c12608274"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.chatInput }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "ba8f9731-67e8-4857-8701-8efb2cbc71cc",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.body.sessionId }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        208
+      ],
+      "id": "ab74de2b-c130-4a18-953f-036d540d9485",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "model": "gpt-oss:20b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        304,
+        208
+      ],
+      "id": "1577e9d7-482b-4f4f-9743-26210215f92b",
+      "name": "Ollama Chat Model",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "retryOnFail": true,
+      "credentials": {
+        "ollamaApi": {
+          "id": "A2410RNwVzkkNny5",
+          "name": "ollama cluster"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://host.docker.internal:8080/mcp",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        608,
+        208
+      ],
+      "id": "f5ac69c2-a998-4012-9359-56aa7d32820f",
+      "name": "MCP Client",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sRH2q93CriociZPv",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "n8nMcp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        64,
+        48
+      ],
+      "id": "90b437f2-5311-4e6b-b74f-efae4efcc51d",
+      "name": "Webhook",
+      "webhookId": "76364d0e-1168-4004-8259-8048dd2d9724"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        768,
+        0
+      ],
+      "id": "eeab22a9-e46e-4bbf-a87a-62fd38ff112a",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed",
+    "timezone": "America/Sao_Paulo",
+    "callerPolicy": "workflowsFromSameOwner",
+    "redactionPolicy": "none",
+    "timeSavedPerExecution": 11
+  },
+  "versionId": "b5e5bc0d-9d40-4022-b3b0-45e69c692cd4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5c94e2039d006f26c431c87afa430e12f977ed9400374ad33b07265e110b85c6"
+  },
+  "id": "FR4exyERf7F2WiQ8",
+  "tags": []
+}
