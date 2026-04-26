@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-promql-mcp
+  namespace: imsilva
+spec:
+  selector:
+    app: prometheus-promql-mcp
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8001 # Ensure this matches the MCP_PORT in prometheus-promql-mcp.py

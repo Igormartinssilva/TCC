@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-promql-mcp ## Ensure this matches the name in Service.yaml
+  namespace: imsilva ## Ensure this matches the namespace in Service.yaml
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-promql-mcp
+  template:
+    metadata:
+      labels:
+        app: prometheus-promql-mcp
+    spec:
+      serviceAccountName: prometheus-promql-mcp
+      containers:
+        - name: prometheus-promql-mcp
+          image: igormsilva/prometheus-promql-mcp:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MCP-TRANSPORT
+              value: "sse"
+            - name: MCP-PORT
+              value: "8080"

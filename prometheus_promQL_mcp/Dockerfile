@@ -1,9 +1,3 @@
-FROM ubuntu:latest
-# Atualiza os repositórios e instala o nano
-RUN apt-get update && apt-get install -y nano
-# Define o comando padrão
-CMD ["/bin/bash"]
-
 # ─── Stage 1: download kubectl + promtool binaries ───────────────────────────
 FROM debian:bookworm-slim AS binaries
 
@@ -31,8 +25,8 @@ RUN curl -fsSL \
 # ─── Stage 2: final runtime image ─────────────────────────────────────────────
 FROM python:3.12-slim
 
-LABEL org.opencontainers.image.title="prometheus-k8s-mcp" \
-      org.opencontainers.image.description="MCP server for Prometheus + Kubernetes troubleshooting" \
+LABEL org.opencontainers.image.title="prometheus-promql-mcp" \
+      org.opencontainers.image.description="MCP server for Prometheus PromQL queries" \
       org.opencontainers.image.licenses="MIT"
 
 # Non-root user for K8s security best-practices
@@ -50,15 +44,16 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 
 # App
 WORKDIR /app
-COPY prometheus_k8s_mcp.py .
+COPY prometheus-promql-mcp.py .
 RUN chown -R mcp:mcp /app
 
 USER mcp
 
-EXPOSE 8000
+EXPOSE 8001
 
+# HEALTHCHECK com socket check (sem endpoint específico necessário)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
-    || exit 1
+    CMD python -c "import socket; socket.create_connection(('127.0.0.1', 8001), timeout=1)"
 
-CMD ["python", "prometheus_k8s_mcp.py"]
+
+CMD ["python", "prometheus-promql-mcp.py"]
