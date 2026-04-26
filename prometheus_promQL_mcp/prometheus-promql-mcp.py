@@ -18,20 +18,21 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger("prom-k8s-mcp")
+logger = logging.getLogger("prometheus-promql-mcp")
 
 # ---------------------------------------------------------------------------
 # Config — override via K8s ConfigMap / env vars
 # ---------------------------------------------------------------------------
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-operated.monitoring.svc.cluster.local:9090")
 KUBECTL_PATH   = os.getenv("KUBECTL_PATH", "/usr/local/bin/kubectl")
 PROMTOOL_PATH  = os.getenv("PROMTOOL_PATH", "/usr/local/bin/promtool")
 KUBECONFIG     = os.getenv("KUBECONFIG", "")
 DEFAULT_NS     = os.getenv("DEFAULT_NAMESPACE", "default")
 MCP_HOST       = os.getenv("MCP_HOST", "0.0.0.0")
-MCP_PORT       = int(os.getenv("MCP_PORT", "8000"))
+MCP_PORT       = int(os.getenv("MCP_PORT", "8001"))
 MCP_TRANSPORT  = os.getenv("MCP_TRANSPORT", "sse")   # 'sse' or 'stdio'
 
-mcp = FastMCP("prometheus-k8s-troubleshooter")
+mcp = FastMCP("prometheus-promql-mcp")
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -123,19 +124,6 @@ def list_available_tools() -> str:
                 "promtool_lint_rules", "promtool_query_instant",
                 "promtool_query_range", "analyze_promql", "suggest_promql_for",
             ],
-            "kubernetes": [
-                "k8s_get_nodes", "k8s_describe_node", "k8s_get_node_resource_usage",
-                "k8s_get_pods", "k8s_get_pods_not_running", "k8s_describe_pod",
-                "k8s_get_pod_logs", "k8s_get_pod_resource_usage",
-                "k8s_get_deployments", "k8s_describe_deployment",
-                "k8s_get_statefulsets", "k8s_get_daemonsets",
-                "k8s_get_jobs", "k8s_get_cronjobs",
-                "k8s_get_services", "k8s_get_endpoints", "k8s_get_ingresses",
-                "k8s_get_pvcs", "k8s_get_pvs",
-                "k8s_get_events", "k8s_get_warning_events",
-                "k8s_get_hpa", "k8s_get_resource_quotas",
-                "k8s_get_namespaces", "k8s_cluster_info", "k8s_version",
-            ],
             "compound_troubleshoot": [
                 "troubleshoot_pod", "troubleshoot_node",
                 "troubleshoot_namespace", "cluster_health_snapshot",
@@ -148,7 +136,6 @@ def list_available_tools() -> str:
             "all_pod_metrics":  'get_pod_full_metrics(pod_name="my-pod", namespace="default")',
             "cluster_health":   "cluster_health_snapshot()",
             "firing_alerts":    "get_firing_alerts()",
-            "pod_logs":         'k8s_get_pod_logs(pod_name="my-pod", namespace="default", tail=50)',
             "full_diagnosis":   'troubleshoot_pod(pod_name="my-pod", namespace="default")',
             "suggest_queries":  'suggest_promql_for(scenario="pod_cpu", pod_name="my-pod", namespace="default")',
         },
@@ -699,8 +686,8 @@ def promtool_check_config(config_file_path: str) -> str:
 @mcp.tool()
 def promtool_query_instant(expr: str) -> str:
     """Run an instant PromQL query via promtool CLI."""
-    clean_expr = expr.replace("\\", "")
-    return json.dumps(_run(f"promtool query instant http://prometheus-operated.monitoring.svc.cluster.local:9090 {shlex.quote(clean_expr)}"), indent=2)
+    clean_expr = expr.replace("\\", "") #The agent sometimes adds extra backslashes when passing the query through the CLI, so we remove them here for promtool to work correctly.
+    return json.dumps(_run(f"promtool query instant {PROMETHEUS_URL} {shlex.quote(clean_expr)}"), indent=2)
 
 
 @mcp.tool()
@@ -803,7 +790,6 @@ def suggest_promql_for(
             "description": "Pods currently in CrashLoopBackOff",
             "recommended_tool": f'get_crashloopbackoff_pods(namespace="{namespace or ""}")',
             "instant_query": f'kube_pod_container_status_waiting_reason{{reason="CrashLoopBackOff"{("," + ns) if ns else ""}}} == 1',
-            "tip": "Use k8s_get_pod_logs to check error messages",
         },
         "node_cpu": {
             "description": "Node CPU usage percentage",
@@ -855,7 +841,6 @@ def suggest_promql_for(
             "description": "PVCs over 80% full",
             "recommended_tool": f'get_pvc_usage(namespace="{namespace or ""}", threshold_percent=80)',
             "instant_query": f'(kubelet_volume_stats_used_bytes{{{ns}}} / kubelet_volume_stats_capacity_bytes{{{ns}}}) * 100 > 80' if ns else '(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 80',
-            "tip": "Check PVC with: k8s_get_pvcs()",
         },
         "hpa_pressure": {
             "description": "HPA current vs desired vs max replicas",
@@ -873,206 +858,6 @@ def suggest_promql_for(
         return json.dumps({"error": f"Unknown scenario '{scenario}'",
                            "available_scenarios": available}, indent=2)
     return json.dumps({"scenario": scenario, **templates[scenario]}, indent=2)
-
-
-# ===========================================================================
-# 7) KUBERNETES TOOLS
-# ===========================================================================
-
-@mcp.tool()
-def k8s_get_nodes(wide: bool = False) -> str:
-    """List all cluster nodes with status and roles."""
-    return _kubectl(f"get nodes {'-o wide' if wide else ''}")
-
-
-@mcp.tool()
-def k8s_describe_node(node_name: str) -> str:
-    """Full describe for a node — conditions, taints, allocatable capacity."""
-    return _kubectl(f"describe node {node_name}")
-
-
-@mcp.tool()
-def k8s_get_node_resource_usage() -> str:
-    """CPU/memory usage per node via kubectl top nodes."""
-    return _kubectl("top nodes --no-headers")
-
-
-@mcp.tool()
-def k8s_get_pods(namespace: str = "all", wide: bool = False, label_selector: str = "") -> str:
-    """
-    List pods filtered by namespace and/or label selector.
-
-    Args:
-        namespace:      Namespace name, or 'all' for cluster-wide
-        wide:           Include node and IP columns
-        label_selector: e.g. 'app=nginx'
-    """
-    ns  = "--all-namespaces" if namespace == "all" else f"-n {namespace}"
-    sel = f"-l {shlex.quote(label_selector)}" if label_selector else ""
-    return _kubectl(f"get pods {ns} {'-o wide' if wide else ''} {sel}")
-
-
-@mcp.tool()
-def k8s_get_pods_not_running(namespace: str = "all") -> str:
-    """List pods NOT in Running/Completed/Succeeded state — quick health scan."""
-    ns     = "--all-namespaces" if namespace == "all" else f"-n {namespace}"
-    output = _kubectl(f"get pods {ns} --no-headers")
-    lines  = [l for l in output.splitlines()
-              if l and not any(s in l for s in ("Running", "Completed", "Succeeded"))]
-    return "\n".join(lines) if lines else "All pods are Running/Completed."
-
-
-@mcp.tool()
-def k8s_describe_pod(pod_name: str, namespace: str = DEFAULT_NS) -> str:
-    """Full describe for a pod — events, conditions, init containers, volumes."""
-    return _kubectl(f"describe pod {pod_name} -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_pod_logs(
-    pod_name: str,
-    namespace: str = DEFAULT_NS,
-    container: str = "",
-    tail: int = 100,
-    previous: bool = False,
-) -> str:
-    """
-    Fetch pod logs.
-
-    Args:
-        pod_name:  Pod name
-        namespace: Namespace
-        container: Container name (omit for single-container pods)
-        tail:      Lines to return (default 100)
-        previous:  If True, return logs from the previously terminated container
-    """
-    c    = f"-c {container}" if container else ""
-    prev = "--previous" if previous else ""
-    return _kubectl(f"logs {pod_name} -n {namespace} {c} --tail={tail} {prev}", timeout=60)
-
-
-@mcp.tool()
-def k8s_get_pod_resource_usage(namespace: str = "all") -> str:
-    """CPU/memory usage per pod via kubectl top pods."""
-    ns = "--all-namespaces" if namespace == "all" else f"-n {namespace}"
-    return _kubectl(f"top pods {ns} --no-headers")
-
-
-@mcp.tool()
-def k8s_get_deployments(namespace: str = DEFAULT_NS) -> str:
-    """List deployments with replica status."""
-    return _kubectl(f"get deployments -n {namespace} -o wide")
-
-
-@mcp.tool()
-def k8s_describe_deployment(deployment_name: str, namespace: str = DEFAULT_NS) -> str:
-    """Full describe for a deployment."""
-    return _kubectl(f"describe deployment {deployment_name} -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_statefulsets(namespace: str = DEFAULT_NS) -> str:
-    """List StatefulSets with replica status."""
-    return _kubectl(f"get statefulsets -n {namespace} -o wide")
-
-
-@mcp.tool()
-def k8s_get_daemonsets(namespace: str = DEFAULT_NS) -> str:
-    """List DaemonSets with desired/current/ready counts."""
-    return _kubectl(f"get daemonsets -n {namespace} -o wide")
-
-
-@mcp.tool()
-def k8s_get_jobs(namespace: str = DEFAULT_NS) -> str:
-    """List Jobs and completion status."""
-    return _kubectl(f"get jobs -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_cronjobs(namespace: str = DEFAULT_NS) -> str:
-    """List CronJobs."""
-    return _kubectl(f"get cronjobs -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_services(namespace: str = DEFAULT_NS) -> str:
-    """List services with ClusterIP, ports, selectors."""
-    return _kubectl(f"get services -n {namespace} -o wide")
-
-
-@mcp.tool()
-def k8s_get_endpoints(namespace: str = DEFAULT_NS) -> str:
-    """List endpoints — verify service-to-pod routing."""
-    return _kubectl(f"get endpoints -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_ingresses(namespace: str = DEFAULT_NS) -> str:
-    """List Ingress resources."""
-    return _kubectl(f"get ingress -n {namespace} -o wide")
-
-
-@mcp.tool()
-def k8s_get_pvcs(namespace: str = DEFAULT_NS) -> str:
-    """List PersistentVolumeClaims and binding status."""
-    return _kubectl(f"get pvc -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_pvs() -> str:
-    """List all PersistentVolumes cluster-wide."""
-    return _kubectl("get pv")
-
-
-@mcp.tool()
-def k8s_get_events(namespace: str = DEFAULT_NS, sort_by: str = "lastTimestamp") -> str:
-    """
-    Return recent Kubernetes events sorted by time.
-
-    Args:
-        namespace: Namespace or 'all'
-        sort_by:   'lastTimestamp' or 'firstTimestamp'
-    """
-    ns = "--all-namespaces" if namespace == "all" else f"-n {namespace}"
-    return _kubectl(f"get events {ns} --sort-by=.{sort_by}")
-
-
-@mcp.tool()
-def k8s_get_warning_events(namespace: str = "all") -> str:
-    """Return only Warning-type events — fastest way to spot problems."""
-    ns     = "--all-namespaces" if namespace == "all" else f"-n {namespace}"
-    output = _kubectl(f"get events {ns} --field-selector=type=Warning --sort-by=.lastTimestamp")
-    return output or "No warning events found."
-
-
-@mcp.tool()
-def k8s_get_hpa(namespace: str = DEFAULT_NS) -> str:
-    """List HorizontalPodAutoscalers with current/desired/max replicas."""
-    return _kubectl(f"get hpa -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_resource_quotas(namespace: str = DEFAULT_NS) -> str:
-    """List ResourceQuotas and usage."""
-    return _kubectl(f"describe resourcequota -n {namespace}")
-
-
-@mcp.tool()
-def k8s_get_namespaces() -> str:
-    """List all namespaces and their status."""
-    return _kubectl("get namespaces")
-
-
-@mcp.tool()
-def k8s_cluster_info() -> str:
-    """Return Kubernetes API server and CoreDNS addresses."""
-    return _kubectl("cluster-info")
-
-
-@mcp.tool()
-def k8s_version() -> str:
-    """Return client and server Kubernetes versions."""
-    return _kubectl("version")
 
 
 # ===========================================================================
@@ -1219,8 +1004,8 @@ async def get_top_resource_consumers(
 # ===========================================================================
 
 if __name__ == "__main__":
-    logger.info(f"Starting Prometheus+K8s MCP | transport={MCP_TRANSPORT} host={MCP_HOST} port={MCP_PORT}")
-    logger.info(f"Prometheus URL: {'http://prometheus-operated.monitoring.svc.cluster.local:9090'} | Default namespace: {DEFAULT_NS}")
+    logger.info(f"Starting Prometheus PromQL MCP | transport={MCP_TRANSPORT} host={MCP_HOST} port={MCP_PORT}")
+    logger.info(f"Prometheus URL: {PROMETHEUS_URL} | Default namespace: {DEFAULT_NS}")
 
     if MCP_TRANSPORT == "stdio":
         mcp.run(transport="stdio")
