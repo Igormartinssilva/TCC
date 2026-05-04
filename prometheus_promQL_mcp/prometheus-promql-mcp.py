@@ -52,10 +52,10 @@ def _run(cmd: str, timeout: int = 30) -> dict:
         return {"stdout": "", "stderr": str(exc), "returncode": -1}
 
 
-async def _prom_get(path: str, prometheus_url: str, params: dict | None = None) -> dict:
+async def _prom_get(path: str,  params: dict | None = None) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.get(f"{prometheus_url}{path}", params=params or {})
+            resp = await client.get(f"{PROMETHEUS_URL}{path}", params=params or {})
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
@@ -74,15 +74,15 @@ def _now_iso() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-async def _instant(expr: str, prometheus_url: str) -> dict:
-    return await _prom_get("/api/v1/query",prometheus_url, {"query": expr})
+async def _instant(expr: str, ) -> dict:
+    return await _prom_get("/api/v1/query", {"query": expr})
 
 
-async def _range( prometheus_url: str, expr: str, minutes: int = 30, step: str = "60s") -> dict:
+async def _range(  expr: str, minutes: int = 30, step: str = "60s") -> dict:
     now   = datetime.utcnow()
     start = (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
     end   = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return await _prom_get("/api/v1/query_range", prometheus_url, {"query": expr, "start": start, "end": end, "step": step})
+    return await _prom_get("/api/v1/query_range", {"query": expr, "start": start, "end": end, "step": step})
 
 
 # ===========================================================================
@@ -149,7 +149,7 @@ def list_available_tools() -> str:
 
 @mcp.tool()
 async def get_pod_cpu(
-    prometheus_url: str,
+    
     pod_name: str,
     namespace: str = DEFAULT_NS,
     mode: str = "instant",
@@ -170,14 +170,14 @@ async def get_pod_cpu(
         f'sum(rate(container_cpu_usage_seconds_total'
         f'{{pod="{pod_name}",namespace="{namespace}",container!=""}}[5m])) by (pod, container)'
     )
-    data = await _range(prometheus_url ,expr, minutes, step) if mode == "range" else await _instant(expr,prometheus_url)
+    data = await _range(expr, minutes, step) if mode == "range" else await _instant(expr)
     return json.dumps({"tool": "get_pod_cpu", "pod": pod_name, "namespace": namespace,
                        "unit": "cores", "promql": expr, "result": data}, indent=2)
 
 
 @mcp.tool()
 async def get_pod_memory(
-    prometheus_url: str,
+    
     pod_name: str,
     namespace: str = DEFAULT_NS,
     mode: str = "instant",
@@ -198,14 +198,14 @@ async def get_pod_memory(
         f'sum(container_memory_working_set_bytes'
         f'{{pod="{pod_name}",namespace="{namespace}",container!=""}}) by (pod, container)'
     )
-    data = await _range(prometheus_url, expr, minutes, step) if mode == "range" else await _instant(expr, prometheus_url)
+    data = await _range(expr, minutes, step) if mode == "range" else await _instant(expr)
     return json.dumps({"tool": "get_pod_memory", "pod": pod_name, "namespace": namespace,
                        "unit": "bytes", "promql": expr, "result": data}, indent=2)
 
 
 @mcp.tool()
 async def get_pod_restarts(
-    prometheus_url: str,
+    
     pod_name: str,
     namespace: str = DEFAULT_NS,
     window_minutes: int = 60,
@@ -222,14 +222,14 @@ async def get_pod_restarts(
         f'increase(kube_pod_container_status_restarts_total'
         f'{{pod="{pod_name}",namespace="{namespace}"}}[{window_minutes}m])'
     )
-    data = await _instant(expr,prometheus_url)
+    data = await _instant(expr)
     return json.dumps({"tool": "get_pod_restarts", "pod": pod_name, "namespace": namespace,
                        "window_minutes": window_minutes, "promql": expr, "result": data}, indent=2)
 
 
 @mcp.tool()
 async def get_pod_network_io(
-     prometheus_url: str,
+     
     pod_name: str,
     namespace: str = DEFAULT_NS,
     minutes: int = 15,
@@ -246,30 +246,29 @@ async def get_pod_network_io(
     """
     rx = f'sum(rate(container_network_receive_bytes_total{{pod="{pod_name}",namespace="{namespace}"}}[5m])) by (pod)'
     tx = f'sum(rate(container_network_transmit_bytes_total{{pod="{pod_name}",namespace="{namespace}"}}[5m])) by (pod)'
-    rx_data, tx_data = await asyncio.gather(_range(prometheus_url,rx, minutes, step), _range(prometheus_url,tx, minutes, step))
+    rx_data, tx_data = await asyncio.gather(_range(rx, minutes, step), _range(tx, minutes, step))
     return json.dumps({"tool": "get_pod_network_io", "pod": pod_name, "namespace": namespace,
                        "rx_bytes_per_sec": rx_data, "tx_bytes_per_sec": tx_data}, indent=2)
 
 
 @mcp.tool()
-async def get_pod_ready_status(prometheus_url:str, pod_name: str, namespace: str = DEFAULT_NS) -> str:
+async def get_pod_ready_status(pod_name: str, namespace: str = DEFAULT_NS) -> str:
     """
     Check if pod containers are ready (1=ready, 0=not ready). No PromQL needed.
 
     Args:
-        prometheus_url: URL of the Prometheus instance
         pod_name:  Exact pod name
         namespace: Kubernetes namespace
     """
     expr = f'kube_pod_container_status_ready{{pod="{pod_name}",namespace="{namespace}"}}'
-    data = await _instant(expr,prometheus_url)
+    data = await _instant(expr)
     return json.dumps({"tool": "get_pod_ready_status", "pod": pod_name, "namespace": namespace,
                        "promql": expr, "result": data}, indent=2)
 
 
 @mcp.tool()
 async def get_pod_full_metrics(
-    prometheus_url: str,
+    
     pod_name: str,
     namespace: str = DEFAULT_NS,
     minutes: int = 15,
@@ -297,7 +296,7 @@ async def get_pod_full_metrics(
         "net_rx_bps":       f'sum(rate(container_network_receive_bytes_total{{pod="{pod_name}",namespace="{namespace}"}}[5m]))',
         "net_tx_bps":       f'sum(rate(container_network_transmit_bytes_total{{pod="{pod_name}",namespace="{namespace}"}}[5m]))',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_pod_full_metrics", "pod": pod_name, "namespace": namespace,
                        "timestamp": _now_iso(), "promql_used": queries, "metrics": results}, indent=2)
 
@@ -307,7 +306,7 @@ async def get_pod_full_metrics(
 # ===========================================================================
 
 @mcp.tool()
-async def get_node_cpu(node_name: str, prometheus_url: str, minutes: int = 15, step: str = "30s") -> str:
+async def get_node_cpu(node_name: str,  minutes: int = 15, step: str = "30s") -> str:
     """
     Get CPU usage percentage for a specific node. No PromQL needed.
 
@@ -317,52 +316,50 @@ async def get_node_cpu(node_name: str, prometheus_url: str, minutes: int = 15, s
         step:      Resolution
     """
     expr = f'100 - (avg by(instance)(rate(node_cpu_seconds_total{{mode="idle",instance=~"{node_name}.*"}}[5m])) * 100)'
-    data = await _range(prometheus_url,expr, minutes, step)
+    data = await _range(expr, minutes, step)
     return json.dumps({"tool": "get_node_cpu", "node": node_name, "unit": "percent",
                        "promql": expr, "result": data}, indent=2)
 
 
 @mcp.tool()
-async def get_node_memory(node_name: str, prometheus_url: str) -> str:
+async def get_node_memory(node_name: str) -> str:
     """
     Get total, available and used memory % for a node. No PromQL needed.
 
     Args:
         node_name: Node name as shown by 'kubectl get nodes'
-        prometheus_url: URL of the Prometheus instance
     """
     queries = {
         "total_bytes":     f'node_memory_MemTotal_bytes{{instance=~"{node_name}.*"}}',
         "available_bytes": f'node_memory_MemAvailable_bytes{{instance=~"{node_name}.*"}}',
         "used_percent":    f'(1 - node_memory_MemAvailable_bytes{{instance=~"{node_name}.*"}} / node_memory_MemTotal_bytes{{instance=~"{node_name}.*"}}) * 100',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_node_memory", "node": node_name,
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_node_disk(node_name: str, prometheus_url: str, mountpoint: str = "/") -> str:
+async def get_node_disk(node_name: str,  mountpoint: str = "/") -> str:
     """
     Get disk usage for a node and mountpoint. No PromQL needed.
 
     Args:
         node_name:  Node name
         mountpoint: Filesystem mountpoint (default '/')
-        prometheus_url: URL of the Prometheus instance
     """
     queries = {
         "avail_bytes":  f'node_filesystem_avail_bytes{{instance=~"{node_name}.*",mountpoint="{mountpoint}"}}',
         "size_bytes":   f'node_filesystem_size_bytes{{instance=~"{node_name}.*",mountpoint="{mountpoint}"}}',
         "used_percent": f'(1 - node_filesystem_avail_bytes{{instance=~"{node_name}.*",mountpoint="{mountpoint}"}} / node_filesystem_size_bytes{{instance=~"{node_name}.*",mountpoint="{mountpoint}"}}) * 100',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_node_disk", "node": node_name, "mountpoint": mountpoint,
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_node_network(node_name: str, prometheus_url: str, minutes: int = 15, step: str = "30s") -> str:
+async def get_node_network(node_name: str,  minutes: int = 15, step: str = "30s") -> str:
     """
     Get network RX/TX bytes per second for a node. No PromQL needed.
 
@@ -375,13 +372,13 @@ async def get_node_network(node_name: str, prometheus_url: str, minutes: int = 1
         "rx_bps": f'rate(node_network_receive_bytes_total{{instance=~"{node_name}.*",device!~"lo|veth.*|docker.*|br.*"}}[5m])',
         "tx_bps": f'rate(node_network_transmit_bytes_total{{instance=~"{node_name}.*",device!~"lo|veth.*|docker.*|br.*"}}[5m])',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_range(prometheus_url,e, minutes, step) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_range(e, minutes, step) for e in queries.values()])))
     return json.dumps({"tool": "get_node_network", "node": node_name,
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_node_full_metrics( prometheus_url: str,node_name: str) -> str:
+async def get_node_full_metrics( node_name: str) -> str:
     """
     All-in-one node metrics: CPU, memory, disk, load, network, pod count. No PromQL needed.
 
@@ -400,7 +397,7 @@ async def get_node_full_metrics( prometheus_url: str,node_name: str) -> str:
         "net_tx_bps":   f'sum(rate(node_network_transmit_bytes_total{{instance=~"{node_name}.*",device!~"lo"}}[5m]))',
         "pod_count":    f'count(kube_pod_info{{node="{node_name}"}})',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_node_full_metrics", "node": node_name,
                        "timestamp": _now_iso(), "promql_used": queries, "metrics": results}, indent=2)
 
@@ -488,12 +485,11 @@ async def get_pending_pods(namespace: str = "") -> str:
 
 
 @mcp.tool()
-async def get_deployment_replica_status(prometheus_url: str, namespace: str = "", deployment_name: str = "") -> str:
+async def get_deployment_replica_status(namespace: str = "", deployment_name: str = "") -> str:
     """
     Get desired vs available replicas for deployments. No PromQL needed.
 
     Args:
-        prometheus_url: URL of the Prometheus instance
         namespace:       Kubernetes namespace — leave empty for all
         deployment_name: Specific deployment — leave empty for all
     """
@@ -508,14 +504,14 @@ async def get_deployment_replica_status(prometheus_url: str, namespace: str = ""
         "available":   f'kube_deployment_status_replicas_available{f_block}',
         "unavailable": f'kube_deployment_status_replicas_unavailable{f_block} > 0',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_deployment_replica_status",
                        "namespace": namespace or "all", "deployment": deployment_name or "all",
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_api_server_health( prometheus_url: str) -> str:
+async def get_api_server_health() -> str:
     """Get Kubernetes API server request rate, error rate and P99 latency. No PromQL needed."""
     queries = {
         "request_rate_5m":     'sum(rate(apiserver_request_total[5m])) by (verb, code)',
@@ -523,13 +519,13 @@ async def get_api_server_health( prometheus_url: str) -> str:
         "latency_p99_seconds": 'histogram_quantile(0.99, sum(rate(apiserver_request_duration_seconds_bucket[5m])) by (le, verb))',
         "inflight_requests":   'sum(apiserver_current_inflight_requests) by (request_kind)',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_api_server_health", "timestamp": _now_iso(),
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_etcd_health( prometheus_url: str) -> str:
+async def get_etcd_health() -> str:
     """Get etcd cluster health: leader, failed proposals, DB size, latency. No PromQL needed."""
     queries = {
         "has_leader":           'etcd_server_has_leader',
@@ -539,18 +535,17 @@ async def get_etcd_health( prometheus_url: str) -> str:
         "grpc_latency_p99":     'histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{grpc_type="unary"}[5m])) by (le))',
         "disk_wal_sync_p99":    'histogram_quantile(0.99, sum(rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) by (le))',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_etcd_health", "timestamp": _now_iso(),
                        "promql_used": queries, "result": results}, indent=2)
 
 
 @mcp.tool()
-async def get_pvc_usage( prometheus_url: str, namespace: str = "", threshold_percent: float = 0) -> str:
+async def get_pvc_usage(namespace: str = "", threshold_percent: float = 0) -> str:
     """
     Get PersistentVolumeClaim disk usage. No PromQL needed.
 
     Args:
-        prometheus_url:    URL of the Prometheus instance
         namespace:         Namespace filter — leave empty for all
         threshold_percent: Only return PVCs above this % (e.g. 80 for >80% full, 0 = all)
     """
@@ -564,7 +559,7 @@ async def get_pvc_usage( prometheus_url: str, namespace: str = "", threshold_per
         "capacity_bytes":f'kubelet_volume_stats_capacity_bytes{block}',
         "used_percent":  pct,
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     return json.dumps({"tool": "get_pvc_usage", "namespace": namespace or "all",
                        "threshold_percent": threshold_percent, "promql_used": queries, "result": results}, indent=2)
 
@@ -575,7 +570,7 @@ async def get_pvc_usage( prometheus_url: str, namespace: str = "", threshold_per
 
 @mcp.tool()
 async def query_prometheus(
-     prometheus_url: str,
+     
     expr: str,
     mode: str = "instant",
     minutes: int = 30,
@@ -591,19 +586,19 @@ async def query_prometheus(
         minutes: Lookback for range mode (default 30)
         step:    Resolution for range mode (default '60s')
     """
-    data = await _range(prometheus_url, expr, minutes, step) if mode == "range" else await _instant(prometheus_url, expr)
+    data = await _range(expr, minutes, step) if mode == "range" else await _instant(expr)
     return json.dumps({"promql": expr, "mode": mode, "result": data}, indent=2)
 
 
 @mcp.tool()
-async def prometheus_list_metrics (prometheus_url:str, match: Optional[str] = None) -> str:
+async def prometheus_list_metrics(match: Optional[str] = None) -> str:
     """
     List all metric names in Prometheus.
 
     Args:
         match: Substring filter, e.g. 'container_cpu' — leave empty for all
     """
-    data  = await _prom_get("/api/v1/label/__name__/values", prometheus_url)
+    data  = await _prom_get("/api/v1/label/__name__/values")
     names: list = data.get("data", [])
     if match:
         names = [n for n in names if match.lower() in n.lower()]
@@ -611,13 +606,13 @@ async def prometheus_list_metrics (prometheus_url:str, match: Optional[str] = No
 
 
 @mcp.tool()
-async def prometheus_get_labels(metric: str,prometheus_url:str) -> str:
+async def prometheus_get_labels(metric: str) -> str:
     """Return all label names for a metric."""
-    return json.dumps(await _prom_get("/api/v1/labels", prometheus_url, {"match[]": metric}), indent=2)
+    return json.dumps(await _prom_get("/api/v1/labels", {"match[]": metric}), indent=2)
 
 
 @mcp.tool()
-async def prometheus_get_label_values(label: str, prometheus_url:str, metric: Optional[str] = None) -> str:
+async def prometheus_get_label_values(label: str, metric: Optional[str] = None) -> str:
     """
     Return all values for a label, optionally scoped to a metric.
 
@@ -626,35 +621,35 @@ async def prometheus_get_label_values(label: str, prometheus_url:str, metric: Op
         metric: Optional metric to scope results
     """
     params = {"match[]": metric} if metric else {}
-    return json.dumps(await _prom_get(f"/api/v1/label/{label}/values", prometheus_url, params), indent=2)
+    return json.dumps(await _prom_get(f"/api/v1/label/{label}/values", params), indent=2)
 
 
 @mcp.tool()
-async def prometheus_get_alerts(prometheus_url:str) -> str:
+async def prometheus_get_alerts() -> str:
     """Return all currently firing alerts from Prometheus."""
-    return json.dumps(await _prom_get("/api/v1/alerts", prometheus_url), indent=2)
+    return json.dumps(await _prom_get("/api/v1/alerts"), indent=2)
 
 
 @mcp.tool()
-async def prometheus_get_rules(prometheus_url:str) -> str:
+async def prometheus_get_rules() -> str:
     """Return all loaded alerting and recording rules."""
-    return json.dumps(await _prom_get("/api/v1/rules", prometheus_url), indent=2)
+    return json.dumps(await _prom_get("/api/v1/rules"), indent=2)
 
 
 @mcp.tool()
-async def prometheus_get_targets(prometheus_url:str) -> str:
+async def prometheus_get_targets() -> str:
     """Return all scrape targets and their UP/DOWN health."""
-    return json.dumps(await _prom_get("/api/v1/targets", prometheus_url), indent=2)
+    return json.dumps(await _prom_get("/api/v1/targets"), indent=2)
 
 
 @mcp.tool()
-async def prometheus_health_check(prometheus_url: str) -> str:
+async def prometheus_health_check() -> str:
     """Check Prometheus /-/healthy and /-/ready endpoints."""
     results = {}
     async with httpx.AsyncClient(timeout=10) as client:
         for path in ("/-/healthy", "/-/ready"):
             try:
-                r = await client.get(f"{prometheus_url}{path}")
+                r = await client.get(f"{PROMETHEUS_URL}{path}")
                 results[path] = {"status_code": r.status_code, "body": r.text.strip()}
             except Exception as exc:
                 results[path] = {"error": str(exc)}
@@ -691,18 +686,17 @@ def promtool_query_instant(expr: str) -> str:
 
 
 @mcp.tool()
-def promtool_query_range(prometheus_url: str, expr: str, start: str, end: str, step: str = "1m") -> str:
+def promtool_query_range(expr: str, start: str, end: str, step: str = "1m") -> str:
     """
     Run a range PromQL query via promtool CLI.
 
     Args:
-        prometheus_url: URL of the Prometheus instance
         expr:  PromQL expression
         start: Start RFC3339, e.g. '2024-01-01T00:00:00Z'
         end:   End RFC3339
         step:  Resolution e.g. '1m', '5m'
     """
-    cmd = f"{PROMTOOL_PATH} query range --url={prometheus_url} --start={start} --end={end} --step={step} {shlex.quote(expr)}"
+    cmd = f"{PROMTOOL_PATH} query range --url={PROMETHEUS_URL} --start={start} --end={end} --step={step} {shlex.quote(expr)}"
     return json.dumps(_run(cmd), indent=2)
 
 
@@ -865,7 +859,7 @@ def suggest_promql_for(
 # ===========================================================================
 
 @mcp.tool()
-async def troubleshoot_pod( prometheus_url: str, pod_name: str, namespace: str = DEFAULT_NS) -> str:
+async def troubleshoot_pod(  pod_name: str, namespace: str = DEFAULT_NS) -> str:
     """
     Complete pod diagnosis: kubectl describe + logs + events + all Prometheus metrics.
     Best single tool to call when a pod is misbehaving.
@@ -889,18 +883,18 @@ async def troubleshoot_pod( prometheus_url: str, pod_name: str, namespace: str =
         "waiting_reason":   f'kube_pod_container_status_waiting_reason{{pod="{pod_name}",namespace="{namespace}"}}',
         "last_exit_reason": f'kube_pod_container_status_last_terminated_reason{{pod="{pod_name}",namespace="{namespace}"}}',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     report["prometheus_metrics"] = results
     return json.dumps(report, indent=2)
 
 
 @mcp.tool()
-async def troubleshoot_node( prometheus_url: str, node_name: str) -> str:
+async def troubleshoot_node(  node_name: str) -> str:
     """
     Complete node diagnosis: kubectl describe + pod list + top + Prometheus metrics.
 
     Args:
-        prometheus_url: URL of the Prometheus instance
+        PROMETHEUS_URL: URL of the Prometheus instance
         node_name: Node name as shown by 'kubectl get nodes'
     """
     report: dict[str, Any] = {"node": node_name, "timestamp": _now_iso()}
@@ -915,13 +909,13 @@ async def troubleshoot_node( prometheus_url: str, node_name: str) -> str:
         "net_rx_bps": f'sum(rate(node_network_receive_bytes_total{{instance=~"{node_name}.*",device!~"lo"}}[5m]))',
         "net_tx_bps": f'sum(rate(node_network_transmit_bytes_total{{instance=~"{node_name}.*",device!~"lo"}}[5m]))',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     report["prometheus_metrics"] = results
     return json.dumps(report, indent=2)
 
 
 @mcp.tool()
-async def troubleshoot_namespace( prometheus_url: str,namespace: str) -> str:
+async def troubleshoot_namespace( namespace: str) -> str:
     """
     Namespace-level diagnosis: pods, deployments, services, events, HPA, quotas + Prometheus.
 
@@ -942,13 +936,13 @@ async def troubleshoot_namespace( prometheus_url: str,namespace: str) -> str:
         "restarts_1h":  f'increase(kube_pod_container_status_restarts_total{{namespace="{namespace}"}}[1h]) > 0',
         "crashloop":    f'kube_pod_container_status_waiting_reason{{reason="CrashLoopBackOff",namespace="{namespace}"}} == 1',
     }
-    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in queries.values()])))
+    results = dict(zip(queries.keys(), await asyncio.gather(*[_instant(e) for e in queries.values()])))
     report["prometheus_metrics"] = results
     return json.dumps(report, indent=2)
 
 
 @mcp.tool()
-async def cluster_health_snapshot( prometheus_url: str) -> str:
+async def cluster_health_snapshot() -> str:
     """
     Full cluster health snapshot — best starting point for any troubleshooting session.
     Covers: node status, unhealthy pods, warning events, firing alerts, top consumers.
@@ -974,7 +968,7 @@ async def cluster_health_snapshot( prometheus_url: str) -> str:
         "api_errors_5m":    "sum(rate(apiserver_request_total{code=~'5..'}[5m])) by (verb) > 0",
         "etcd_has_leader":  "etcd_server_has_leader",
     }
-    results = dict(zip(prom_queries.keys(), await asyncio.gather(*[_instant(e, prometheus_url) for e in prom_queries.values()])))
+    results = dict(zip(prom_queries.keys(), await asyncio.gather(*[_instant(e) for e in prom_queries.values()])))
     report["prometheus"] = results
     return json.dumps(report, indent=2)
 
