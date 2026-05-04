@@ -15,9 +15,7 @@ docker build -t prometheus-promql-mcp:latest .
 Run the container to test it locally:
 
 ```bash
-docker run --rm -p 8001:8001 \
-  -e PROMETHEUS_URL=http://your-prometheus:9090 \
-  prometheus-promql-mcp:latest
+docker run --rm -p 8001:8001 -e PROMETHEUS_URL=http://your-prometheus:9090 prometheus-promql-mcp:latest
 ```
 
 Replace `http://your-prometheus:9090` with your Prometheus URL.
